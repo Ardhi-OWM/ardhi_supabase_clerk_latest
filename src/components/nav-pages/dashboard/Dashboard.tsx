@@ -5,67 +5,89 @@ import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp } from "lucide-re
 import IconButton from "@mui/material/IconButton";
 import Box from "@mui/material/Box";
 import "leaflet/dist/leaflet.css";
-import * as L from 'leaflet';
-import { MapContainer, TileLayer, useMap, GeoJSON } from "react-leaflet";
-import { GeoJsonObject } from 'geojson';
-
-
+import { MapContainer, TileLayer, GeoJSON, useMap } from "react-leaflet";
+import { GeoJsonObject } from "geojson";
+import * as L from "leaflet";
 
 import { mapLayers } from "@/components/constants";
 import SidebarItems from "@/components/nav-pages/dashboard/SidebarItems";
 import SearchControl from "@/components/nav-pages/dashboard/db_functions";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
-interface MapProps {
-    geoJSONDataList?: GeoJsonObject[];
+// Define a custom GeoJSON type with properties
+interface CustomGeoJSON extends GeoJsonObject {
+    properties?: {
+        name?: string;
+        type?: string;
+        bounds?: [L.LatLngExpression, L.LatLngExpression]; // Array of two LatLngExpression values
+        imageUrl?: string;
+    };
 }
 
-const DashboardMap: React.FC<MapProps> = () => {
-    const [geoJSONDataList, setGeoJSONDataList] = useState<GeoJsonObject[]>([]);
+// Component to handle GeoTIFF overlay
+interface GeoTIFFOverlayProps {
+    geoTIFFOverlay: L.ImageOverlay | null;
+}
+
+const GeoTIFFOverlay: React.FC<GeoTIFFOverlayProps> = ({ geoTIFFOverlay }) => {
+    const map = useMap();
+
+    useEffect(() => {
+        if (geoTIFFOverlay) {
+            geoTIFFOverlay.addTo(map);
+
+            // Fit the map to the bounds of the overlay
+            map.fitBounds(geoTIFFOverlay.getBounds());
+
+            // Cleanup function to remove the overlay when the component unmounts
+            return () => {
+                geoTIFFOverlay.remove();
+            };
+        }
+    }, [geoTIFFOverlay, map]);
+
+    return null; // This component doesn't render anything
+};
+
+// Component to handle map bounds
+const MapBounds: React.FC<{ geoJSONDataList: CustomGeoJSON[] }> = ({ geoJSONDataList }) => {
+    const map = useMap();
+
+    useEffect(() => {
+        if (!geoJSONDataList.length || !map) return;
+
+        const allBounds = geoJSONDataList
+            .map((geoJSON) => {
+                if (geoJSON.properties?.bounds) {
+                    // Convert bounds to LatLngBounds
+                    return L.latLngBounds(geoJSON.properties.bounds);
+                }
+                const layer = L.geoJSON(geoJSON);
+                return layer.getBounds();
+            })
+            .filter((bounds) => bounds.isValid());
+
+        if (allBounds.length === 0) return;
+
+        const mergedBounds = allBounds.reduce((acc, bounds) => acc.extend(bounds), allBounds[0]);
+
+        if (mergedBounds.isValid()) {
+            map.fitBounds(mergedBounds);
+        }
+    }, [map, geoJSONDataList]);
+
+    return null;
+};
+
+// Main DashboardMap component
+const DashboardMap: React.FC = () => {
+    const [geoJSONDataList, setGeoJSONDataList] = useState<CustomGeoJSON[]>([]);
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [isOpen, setIsOpen] = useState(false);
     const [activeLayer, setActiveLayer] = useState(
-        mapLayers.find(layer => layer.default)?.url || mapLayers[0].url
+        mapLayers.find((layer) => layer.default)?.url || mapLayers[0].url
     );
-
-    // --------------- ----------------------------------------------------------------
-    // --------------- Zoom to data bounds when data is loaded or changed-------------
-    const MapBounds: React.FC = () => {
-        const map = useMap();
-
-        useEffect(() => {
-            if (!geoJSONDataList.length || !map) return;
-
-            const allBounds = geoJSONDataList
-                .map((geoJSON) => {
-                    const layer = L.geoJSON(geoJSON as GeoJsonObject);
-                    return layer.getBounds();
-                })
-                .filter((bounds) => bounds.isValid());
-
-            if (allBounds.length === 0) return;
-
-            const mergedBounds = allBounds.reduce((acc, bounds) => acc.extend(bounds), allBounds[0]);
-
-            if (mergedBounds.isValid()) {
-                map.fitBounds(mergedBounds);
-            }
-        }, [map]);
-
-        return null;
-    };
-
-    // --------------- ----------------------------------------------------------------
-    // --------------- Change data to Leaflet CRS-------------
-    useEffect(() => {
-        geoJSONDataList.forEach((data, index) => {
-            if ("features" in data) {
-                console.log(`Dataset ${index + 1}:`, data);
-            }
-        });
-    }, [geoJSONDataList]);
-
-  
+    const [geoTIFFOverlay, setGeoTIFFOverlay] = useState<L.ImageOverlay | null>(null);
 
     return (
         <div className="flex h-[calc(100vh-5rem)] overflow-hidden w-full">
@@ -78,7 +100,11 @@ const DashboardMap: React.FC<MapProps> = () => {
 
                 {sidebarOpen && (
                     <Box className="mt-2">
-                        <SidebarItems geoJSONDataList={geoJSONDataList} setGeoJSONDataList={setGeoJSONDataList} />
+                        <SidebarItems
+                            geoJSONDataList={geoJSONDataList}
+                            setGeoJSONDataList={setGeoJSONDataList}
+                            setGeoTIFFOverlay={setGeoTIFFOverlay}
+                        />
                     </Box>
                 )}
             </div>
@@ -98,9 +124,14 @@ const DashboardMap: React.FC<MapProps> = () => {
                     {geoJSONDataList.map((geoJSONData, index) => (
                         <GeoJSON key={index} data={geoJSONData} />
                     ))}
-                    <MapBounds />
 
-                    {/* Layer Selector Dropdown - Ensure it's inside the map */}
+                    {/* Add the GeoTIFFOverlay component */}
+                    <GeoTIFFOverlay geoTIFFOverlay={geoTIFFOverlay} />
+
+                    {/* Add the MapBounds component */}
+                    <MapBounds geoJSONDataList={geoJSONDataList} />
+
+                    {/* Layer Selector Dropdown */}
                     <div className="absolute bottom-2 left-2 z-[1001]">
                         <DropdownMenu onOpenChange={(open) => setIsOpen(open)}>
                             <DropdownMenuTrigger asChild>
@@ -133,8 +164,6 @@ const DashboardMap: React.FC<MapProps> = () => {
             </div>
         </div>
     );
-}
+};
 
 export default DashboardMap;
-
-
